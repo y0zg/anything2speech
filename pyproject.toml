@@ -1,7 +1,7 @@
 [build-system]
 # uv's build backend is bundled inside uv itself, so building fetches nothing from PyPI
 # (an unlocked build backend would bypass uv.lock's hash pinning).
-requires = ["uv_build>=0.12.2,<0.13"]
+requires = ["uv_build>=0.12.2,<0.14"]
 build-backend = "uv_build"
 
 [project]
