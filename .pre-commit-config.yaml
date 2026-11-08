@@ -1,0 +1,10 @@
+# Install once: uv run pre-commit install
+# Hooks are pinned to full commit SHAs (tag in comment); bump with:
+#   uv run pre-commit autoupdate --freeze
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: 83d9cd684c87d95d656c1458ef04895a7f1cbd8e # frozen: v8.30.1
+    hooks:
+      - id: gitleaks # scans staged changes for secrets; built from the pinned source
+        # pre-commit downloads this Go toolchain itself, so the system Go version doesn't matter
+        language_version: 1.24.11

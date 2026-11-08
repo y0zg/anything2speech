@@ -1,0 +1,148 @@
+name: CI
+
+# Supply-chain posture (see README "Supply-chain hardening"):
+# - `pull_request` only (never `pull_request_target`/`workflow_run`): fork PRs get a read-only
+#   token and no secrets, and nothing from a PR runs with elevated privileges.
+# - Every action is pinned to a full commit SHA; every downloaded binary is checksum-verified;
+#   Python deps install from the hash-locked uv.lock; Docker bases are pinned by digest.
+# - harden-runner blocks all network egress except the endpoints listed per job, so a
+#   compromised dependency cannot exfiltrate data or fetch a second stage.
+# - No caches (avoids cache poisoning), no secrets, no persisted git credentials.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep in sync with the uv image in Dockerfile. Checksum is for uv-x86_64-unknown-linux-gnu.tar.gz:
+  #   gh release download <ver> -R astral-sh/uv -p 'uv-x86_64-unknown-linux-gnu.tar.gz.sha256' -O -
+  UV_VERSION: "0.12.2"
+  UV_SHA256: d66e96b5f1ca3b99806eee283a8125d33a0bd669e6e6d9bc4ab7ffda63c41bf4
+  GITLEAKS_VERSION: "8.30.1"
+  GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+  UV_NO_PROGRESS: "1"
+
+jobs:
+  test:
+    name: test (py${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: block
+          disable-sudo-and-containers: true
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            release-assets.githubusercontent.com:443
+            objects.githubusercontent.com:443
+            releases.astral.sh:443
+            pypi.org:443
+            files.pythonhosted.org:443
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          checksum: ${{ env.UV_SHA256 }}
+          download-from-astral-mirror: false
+          enable-cache: false
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --locked --all-extras
+      - run: uv run ruff check
+      - run: uv run ruff format --check
+      - run: uv run mypy
+      - run: uv run pytest
+      - run: uv build --offline # build backend is bundled in uv: no network needed
+
+  security:
+    name: security (secrets + workflow audit)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: block
+          disable-sudo-and-containers: true
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            release-assets.githubusercontent.com:443
+            objects.githubusercontent.com:443
+            releases.astral.sh:443
+            pypi.org:443
+            files.pythonhosted.org:443
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # scan the full history, not just the tip
+      - name: Install gitleaks (checksum-verified)
+        run: |
+          curl -fsSL --proto '=https' --tlsv1.2 -o gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum --check --strict
+          tar -xzf gitleaks.tgz gitleaks && rm gitleaks.tgz
+      - name: Scan for secrets
+        run: ./gitleaks git --redact --verbose --exit-code 1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          checksum: ${{ env.UV_SHA256 }}
+          download-from-astral-mirror: false
+          enable-cache: false
+          python-version: "3.12"
+      - name: Audit workflows (zizmor, online checks for vulnerable/impostor actions)
+        run: uv run --locked --only-dev zizmor --format=github --min-severity=low .github/
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  docker:
+    name: docker build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            registry-1.docker.io:443
+            auth.docker.io:443
+            production.cloudflare.docker.com:443
+            ghcr.io:443
+            pkg-containers.githubusercontent.com:443
+            deb.debian.org:80
+            deb.debian.org:443
+            pypi.org:443
+            files.pythonhosted.org:443
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build -t anything2speech:ci .
+      - name: Smoke test (no network)
+        run: |
+          printf 'Привіт, світе!\n' > hello.txt
+          docker run --rm --network none --user "$(id -u):$(id -g)" -v "$PWD:/work" anything2speech:ci \
+            hello.txt -o out/hello.mp3 --text-only -q
+          grep -q 'Привіт' out/hello.txt
+          docker run --rm --network none --entrypoint tesseract anything2speech:ci --list-langs \
+            | grep -qx ukr
