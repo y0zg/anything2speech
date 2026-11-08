@@ -1,0 +1,71 @@
+[build-system]
+# uv's build backend is bundled inside uv itself, so building fetches nothing from PyPI
+# (an unlocked build backend would bypass uv.lock's hash pinning).
+requires = ["uv_build>=0.12.2,<0.13"]
+build-backend = "uv_build"
+
+[project]
+name = "anything2speech"
+version = "0.2.0"
+description = "Convert text files and images (via OCR) into a single speech audio file."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Oleksandr Kulbida" }]
+keywords = ["tts", "ocr", "text-to-speech", "audiobook", "tesseract", "gtts"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Environment :: Console",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+    "gTTS>=2.5",
+    "Pillow>=10.0",
+    "pytesseract>=0.3.10",
+    "tenacity>=8.2",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+docx = ["python-docx>=1.1"]
+
+[project.scripts]
+anything2speech = "anything2speech.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "pre-commit>=4.6.2",
+    "zizmor>=1.30.1",
+]
+
+[tool.uv]
+# Supply-chain cooldown: ignore package versions published in the last 7 days, so
+# compromised releases are usually caught and yanked before we can resolve them.
+exclude-newer = "7 days"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PL"]
+ignore = [
+    "PLR0913",
+    "PLR2004",
+    "PLC0415", # lazy imports keep startup fast and optional deps optional
+    "RUF001",  # Cyrillic text is expected
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true
+files = ["src"]
